@@ -154,7 +154,7 @@ else:
                             # Claude API를 사용하여 사업계획서 생성 (스트리밍 방식)
                             with client.messages.stream(
                                 model=selected_model,
-                                max_tokens=100000,
+                                max_tokens=64000,  # Claude 모델의 최대 출력 토큰 수 제한
                                 temperature=0.7,
                                 messages=[
                                     {"role": "user", "content": prompt}
