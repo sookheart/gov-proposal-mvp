@@ -2,6 +2,10 @@ import streamlit as st
 import anthropic
 import json
 import time
+from io import BytesIO
+from pptx import Presentation
+from pptx.util import Inches, Pt
+import re
 
 # 제목과 설명 표시
 st.title("🏢 정부지원과제 사업계획서 작성기")
@@ -9,6 +13,74 @@ st.write(
     "정부지원과제 공고 내용과 회사 정보를 입력하면 Claude AI가 맞춤형 사업계획서를 작성해 드립니다. "
     "이 앱을 사용하려면 Anthropic의 Claude API 키가 필요합니다."
 )
+
+def split_into_sections(text):
+    """사업계획서 텍스트를 섹션별로 분리합니다."""
+    # 주요 섹션 패턴 (숫자. 제목)
+    section_pattern = r'\n\s*\d+\.\s+[^\n]+'
+    sections = re.split(section_pattern, text)
+    
+    # 섹션 제목 추출
+    section_titles = re.findall(section_pattern, text)
+    
+    # 첫 번째 섹션은 일반적으로 서문이므로 "서문" 제목 추가
+    if sections and not section_titles:
+        sections = sections[1:]  # 빈 첫 섹션 제거
+    elif sections and len(sections) > len(section_titles):
+        sections[0] = sections[0].strip()
+        if sections[0]:  # 첫 섹션에 내용이 있으면
+            section_titles.insert(0, "서문")
+        else:
+            sections = sections[1:]  # 빈 첫 섹션 제거
+    
+    # 섹션 제목과 내용 결합
+    result = []
+    for i in range(len(section_titles)):
+        if i < len(sections):
+            section_content = sections[i].strip()
+            if section_content:  # 내용이 있는 경우에만 추가
+                result.append((section_titles[i].strip(), section_content))
+    
+    return result
+
+def create_pptx(title, sections):
+    """사업계획서 내용으로 PowerPoint 파일을 생성합니다."""
+    prs = Presentation()
+    
+    # 제목 슬라이드 추가
+    title_slide_layout = prs.slide_layouts[0]
+    slide = prs.slides.add_slide(title_slide_layout)
+    slide.shapes.title.text = title
+    
+    # 각 섹션을 별도 슬라이드로 추가
+    for section_title, section_content in sections:
+        # 섹션 제목 슬라이드
+        section_slide_layout = prs.slide_layouts[1]
+        slide = prs.slides.add_slide(section_slide_layout)
+        slide.shapes.title.text = section_title
+        
+        # 섹션 내용을 여러 슬라이드로 분할 (텍스트가 많을 경우)
+        content_chunks = [section_content[i:i+800] for i in range(0, len(section_content), 800)]
+        
+        # 첫 번째 청크는 섹션 제목 슬라이드에 추가
+        if content_chunks:
+            tf = slide.shapes.placeholders[1].text_frame
+            tf.text = content_chunks[0]
+        
+        # 나머지 청크는 새 슬라이드에 추가
+        for chunk in content_chunks[1:]:
+            content_slide_layout = prs.slide_layouts[2]
+            slide = prs.slides.add_slide(content_slide_layout)
+            slide.shapes.title.text = f"{section_title} (계속)"
+            tf = slide.shapes.placeholders[1].text_frame
+            tf.text = chunk
+    
+    # 메모리에 저장
+    output = BytesIO()
+    prs.save(output)
+    output.seek(0)
+    
+    return output
 
 # 사용자로부터 Claude API 키 입력 받기
 claude_api_key = st.text_input("Claude API Key", type="password")
@@ -143,6 +215,8 @@ else:
                     
                     각 항목을 상세히 작성하고, 공고 내용과 회사 정보를 적절히 연계하여 설득력 있는 사업계획서를 작성해주세요.
                     문서는 한글로 작성해주세요.
+                    
+                    각 섹션과 소제목을 명확하게 구분하여 작성해주세요. 각 섹션 시작은 '숫자. 제목' 형식으로 해주세요.
                     """
                     
                     with st.spinner("사업계획서 작성 중... (약 3-5분 소요됩니다)"):
@@ -166,15 +240,60 @@ else:
                             
                             # 결과 표시
                             st.subheader("📝 생성된 사업계획서")
-                            st.markdown(full_response)
                             
-                            # 다운로드 버튼 추가
-                            st.download_button(
-                                label="사업계획서 다운로드 (.txt)",
-                                data=full_response,
-                                file_name=f"{company_name}_사업계획서.txt",
-                                mime="text/plain"
-                            )
+                            # 탭 생성 (텍스트 전체 보기 / 섹션별 보기)
+                            tab1, tab2 = st.tabs(["텍스트 전체 보기", "섹션별 보기"])
+                            
+                            with tab1:
+                                st.markdown(full_response)
+                                
+                                # 다운로드 버튼 추가 (텍스트)
+                                st.download_button(
+                                    label="사업계획서 다운로드 (.txt)",
+                                    data=full_response,
+                                    file_name=f"{company_name}_사업계획서.txt",
+                                    mime="text/plain"
+                                )
+                            
+                            with tab2:
+                                # 섹션별로 분리
+                                sections = split_into_sections(full_response)
+                                
+                                for i, (section_title, section_content) in enumerate(sections):
+                                    with st.expander(f"{section_title}", expanded=i==0):
+                                        st.markdown(section_content)
+                                
+                                # 섹션별 파일 생성
+                                section_files = {}
+                                for section_title, section_content in sections:
+                                    clean_title = section_title.strip().replace('.', '_').replace(' ', '_')
+                                    section_files[f"{clean_title}.txt"] = section_content
+                                
+                                # 다운로드 버튼 (섹션별 텍스트)
+                                for file_name, content in section_files.items():
+                                    st.download_button(
+                                        label=f"{file_name} 다운로드",
+                                        data=content,
+                                        file_name=file_name,
+                                        mime="text/plain",
+                                        key=file_name
+                                    )
+                            
+                            # PowerPoint 생성 및 다운로드
+                            try:
+                                ppt_title = f"{company_name} 사업계획서"
+                                ppt_buffer = create_pptx(ppt_title, sections)
+                                
+                                st.subheader("📊 PowerPoint 다운로드")
+                                st.download_button(
+                                    label="사업계획서 PowerPoint 다운로드 (.pptx)",
+                                    data=ppt_buffer,
+                                    file_name=f"{company_name}_사업계획서.pptx",
+                                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                                )
+                            except Exception as e:
+                                st.warning(f"PowerPoint 생성 중 오류가 발생했습니다: {str(e)}")
+                                st.info("Python-pptx 라이브러리 설치가 필요합니다. requirements.txt 파일에 'python-pptx'를 추가해주세요.")
                             
                         except Exception as e:
                             st.error(f"사업계획서 생성 중 오류가 발생했습니다: {str(e)}")
