@@ -147,27 +147,31 @@ else:
                     
                     with st.spinner("사업계획서 작성 중... (약 3-5분 소요됩니다)"):
                         try:
-                            # Claude API를 사용하여 사업계획서 생성
-                            response = client.messages.create(
+                            # 스트리밍 응답을 위한 빈 텍스트 공간 생성
+                            response_placeholder = st.empty()
+                            full_response = ""
+                            
+                            # Claude API를 사용하여 사업계획서 생성 (스트리밍 방식)
+                            with client.messages.stream(
                                 model=selected_model,
                                 max_tokens=100000,
                                 temperature=0.7,
                                 messages=[
                                     {"role": "user", "content": prompt}
                                 ]
-                            )
-                            
-                            # 응답 출력
-                            proposal = response.content[0].text
+                            ) as stream:
+                                for text in stream.text_stream:
+                                    full_response += text
+                                    response_placeholder.markdown(full_response)
                             
                             # 결과 표시
                             st.subheader("📝 생성된 사업계획서")
-                            st.markdown(proposal)
+                            st.markdown(full_response)
                             
                             # 다운로드 버튼 추가
                             st.download_button(
                                 label="사업계획서 다운로드 (.txt)",
-                                data=proposal,
+                                data=full_response,
                                 file_name=f"{company_name}_사업계획서.txt",
                                 mime="text/plain"
                             )
